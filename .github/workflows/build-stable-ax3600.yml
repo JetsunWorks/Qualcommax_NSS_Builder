@@ -27,6 +27,8 @@ env:
   KERNEL_PATCH_TAG: v24.10.5
   KERNEL_PATCH_SHA: 4f7e6e554be2aef6a55be36f9f954d56705eb2ee
   NSS_SOURCE_SHA: 2a9a39243cf39a053b25286826be711505605029
+  NSS_MAC80211_VERSION: 6.12.61
+  NSS_MAC80211_HASH: 9db2f836dba7f38ad68f8798720ad4360bce6a3557bde02b88b3a4f068c77118
   NSS_KERNEL_PIN_SHA: 581050ce4e1f28a8e371cbd090f48945e02d4448
   NSS_KERNEL_PATCH_SET_SHA: a65d1295baf96046a9aa7f206a40230358d83e1c
   NSS_KERNEL_VERSION: 6.6.119
@@ -109,6 +111,13 @@ jobs:
           test -s target/linux/qualcommax/patches-6.6/0113-remoteproc-qcom-Add-secure-PIL-support.patch
           git show "$NSS_KERNEL_PIN_SHA:target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch" \
             > target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch
+          # The pinned NSS ath11k patches use mac80211 backports 6.12.61.
+          # OpenWrt 24.10.8 moved to 6.12.96, where NSS patch 068 no longer
+          # applies. Restore the complete matching package and patch queue.
+          git checkout "$NSS_SOURCE_SHA" -- package/kernel/mac80211
+          grep -Fxq "PKG_VERSION:=$NSS_MAC80211_VERSION" package/kernel/mac80211/Makefile
+          grep -Fxq "PKG_HASH:=$NSS_MAC80211_HASH" package/kernel/mac80211/Makefile
+          test -s package/kernel/mac80211/patches/nss/ath11k/068-ath11k-add-rx-histogram-stats.patch
           # Restore the complete patch set updated alongside the Linux 6.6.119
           # kernel pin. These contexts are coupled: restoring only 0600-4 leaves
           # CORE and other NSS patches targeting later kernel APIs.
@@ -142,6 +151,8 @@ jobs:
           {
             printf 'Official release: %s\nOfficial commit: %s\nNSS source: %s\n' \
               "$OPENWRT_TAG" "$OPENWRT_SHA" "$NSS_SOURCE_SHA"
+            printf 'mac80211 backports: %s (SHA-256 %s), restored from NSS source %s\n' \
+              "$NSS_MAC80211_VERSION" "$NSS_MAC80211_HASH" "$NSS_SOURCE_SHA"
             printf 'Kernel patch baseline: %s @ %s (matched to Linux %s)\n' \
               "$KERNEL_PATCH_TAG" "$KERNEL_PATCH_SHA" "$NSS_KERNEL_VERSION"
             printf 'Generic backport and pending queues: %s @ %s\n' \
@@ -261,6 +272,7 @@ jobs:
           Linux kernel: $NSS_KERNEL_VERSION
           Official commit: $OPENWRT_SHA
           NSS source: $NSS_SOURCE_SHA
+          mac80211 backports: $NSS_MAC80211_VERSION (SHA-256 $NSS_MAC80211_HASH)
           NSS kernel pin source: $NSS_KERNEL_PIN_SHA
           NSS 6.6.119 patch-set source: $NSS_KERNEL_PATCH_SET_SHA
           Wi-Fi NSS: $WIFI_NSS
@@ -290,7 +302,8 @@ jobs:
           cp ../artifacts/diagnostics/config.diff ../artifacts/firmware/
           cat > ../artifacts/firmware/READ-ME.txt <<'EOF'
           This is third-party NSS firmware built from OpenWrt v24.10.8 sources plus
-          qosmio's pinned 24.10 NSS tree, using Linux 6.6.119.
+          qosmio's pinned 24.10 NSS tree, using Linux 6.6.119 and the matching
+          mac80211 backports 6.12.61.
           Kernel pin source: NSS commit 581050c. All 11 compatible NSS patch files come from commit a65d129.
           It is not an official OpenWrt release image.
           Target: Xiaomi AX3600, qualcommax/ipq807x, 512 MB RAM.
