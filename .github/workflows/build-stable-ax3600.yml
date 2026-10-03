@@ -87,10 +87,12 @@ jobs:
             "$NSS_FEED_SHA" >> feeds.conf.default
           printf 'src-git sqm_scripts_nss https://github.com/qosmio/sqm-scripts-nss.git^%s\n' \
             "$SQM_FEED_SHA" >> feeds.conf.default
-          # The 24.10.8 backport queue assumes Linux 6.6.141. This build pins
-          # Linux 6.6.119, so restore the official 24.10.5 generic backports,
-          # which match that exact kernel source and retain prerequisite moves.
-          git checkout "$KERNEL_PATCH_SHA" -- target/linux/generic/backport-6.6
+          # The 24.10.8 backport and pending queues assume Linux 6.6.141. This
+          # build pins Linux 6.6.119, so restore both official 24.10.5 queues,
+          # which use the older kernel APIs, while retaining prerequisite moves.
+          git checkout "$KERNEL_PATCH_SHA" -- \
+            target/linux/generic/backport-6.6 \
+            target/linux/generic/pending-6.6
           test -s target/linux/generic/backport-6.6/702-01-v6.7-net-phy-aquantia-move-to-separate-directory.patch
           test -s target/linux/generic/backport-6.6/713-v6.9-01-net-phy-move-at803x-PHY-driver-to-dedicated-director.patch
           # Keep the current NSS driver tree, but use the historical 6.6.119
@@ -106,9 +108,9 @@ jobs:
           grep -Fxq "LINUX_KERNEL_HASH-${NSS_KERNEL_VERSION} = $NSS_KERNEL_HASH" include/kernel-6.6
           git add feeds.conf.default include/kernel-6.6 \
             target/linux/generic/backport-6.6 \
-            target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch \
+            target/linux/generic/pending-6.6 \
             target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
-          git commit -m "Use 6.6.119-compatible OpenWrt kernel backports"
+          git commit -m "Use 6.6.119-compatible OpenWrt patch queues"
           git merge-base --is-ancestor "$OPENWRT_SHA" HEAD
           git merge-base --is-ancestor "$NSS_SOURCE_SHA" HEAD
           git merge-base --is-ancestor "$NSS_KERNEL_PIN_SHA" HEAD
@@ -118,13 +120,15 @@ jobs:
               "$OPENWRT_TAG" "$OPENWRT_SHA" "$NSS_SOURCE_SHA"
             printf 'Kernel patch baseline: %s @ %s (matched to Linux %s)\n' \
               "$KERNEL_PATCH_TAG" "$KERNEL_PATCH_SHA" "$NSS_KERNEL_VERSION"
+            printf 'Generic backport and pending queues: %s @ %s\n' \
+              "$KERNEL_PATCH_TAG" "$KERNEL_PATCH_SHA"
             printf 'Kernel pin source: %s\nBonding patch source: %s\n' \
               "$NSS_KERNEL_PIN_SHA" "$NSS_BONDING_PATCH_SHA"
             printf 'Merged source tree: %s\nBuilder: %s @ %s\n' \
               "$(git rev-parse HEAD^{tree})" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
             printf 'NSS kernel: %s\nKernel source hash: %s\n' \
               "$NSS_KERNEL_VERSION" "$NSS_KERNEL_HASH"
-            printf 'Kernel patch: 610-netfilter from the Linux %s NSS kernel pin\n' \
+            printf 'Kernel patch: 610-netfilter restored from the Linux %s NSS kernel pin\n' \
               "$NSS_KERNEL_VERSION"
             printf 'Bonding patch: NSS 0600-4 revision refreshed for Linux 6.6.119\n'
             printf 'Run: https://github.com/%s/actions/runs/%s\n' \
