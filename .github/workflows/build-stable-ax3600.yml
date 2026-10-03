@@ -92,7 +92,7 @@ jobs:
           # which match that exact kernel source and retain prerequisite moves.
           git checkout "$KERNEL_PATCH_SHA" -- target/linux/generic/backport-6.6
           test -s target/linux/generic/backport-6.6/702-01-v6.7-net-phy-aquantia-move-to-separate-directory.patch
-          test -s target/linux/generic/backport-6.6/713-v6.9-01-net-phy-move-at803x-PHY-driver-to-dedicated-directory.patch
+          test -s target/linux/generic/backport-6.6/713-v6.9-01-net-phy-move-at803x-PHY-driver-to-dedicated-director.patch
           # Keep the current NSS driver tree, but use the historical 6.6.119
           # kernel pin and the bonding patch revision explicitly refreshed for it.
           git merge-base --is-ancestor "$NSS_KERNEL_PIN_SHA" "$NSS_SOURCE_SHA"
