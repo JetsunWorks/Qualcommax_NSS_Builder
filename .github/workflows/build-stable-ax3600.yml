@@ -97,13 +97,16 @@ jobs:
           test -s target/linux/generic/backport-6.6/713-v6.9-01-net-phy-move-at803x-PHY-driver-to-dedicated-director.patch
           # Keep the current NSS driver tree, but use the historical 6.6.119
           # kernel pin and patches with matching kernel API contexts. The
-          # current NSS procfs-debloat hunk expects a newer ptype iterator type.
+          # current NSS procfs-debloat and Q6 WCSS hunks target newer kernels.
           git merge-base --is-ancestor "$NSS_KERNEL_PIN_SHA" "$NSS_SOURCE_SHA"
           git merge-base --is-ancestor "$NSS_BONDING_PATCH_SHA" "$NSS_SOURCE_SHA"
           git show "$NSS_KERNEL_PIN_SHA:include/kernel-6.6" > include/kernel-6.6
           git show "$NSS_KERNEL_PIN_SHA:target/linux/generic/hack-6.6/902-debloat_proc.patch" \
             > target/linux/generic/hack-6.6/902-debloat_proc.patch
           test -s target/linux/generic/hack-6.6/902-debloat_proc.patch
+          git show "$NSS_KERNEL_PIN_SHA:target/linux/qualcommax/patches-6.6/0113-remoteproc-qcom-Add-secure-PIL-support.patch" \
+            > target/linux/qualcommax/patches-6.6/0113-remoteproc-qcom-Add-secure-PIL-support.patch
+          test -s target/linux/qualcommax/patches-6.6/0113-remoteproc-qcom-Add-secure-PIL-support.patch
           git show "$NSS_KERNEL_PIN_SHA:target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch" \
             > target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch
           git show "$NSS_BONDING_PATCH_SHA:target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch" \
@@ -114,6 +117,7 @@ jobs:
             target/linux/generic/backport-6.6 \
             target/linux/generic/pending-6.6 \
             target/linux/generic/hack-6.6/902-debloat_proc.patch \
+            target/linux/qualcommax/patches-6.6/0113-remoteproc-qcom-Add-secure-PIL-support.patch \
             target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
           git commit -m "Use 6.6.119-compatible OpenWrt patch queues"
           git merge-base --is-ancestor "$OPENWRT_SHA" HEAD
@@ -130,6 +134,8 @@ jobs:
             printf 'Kernel pin source: %s\nBonding patch source: %s\n' \
               "$NSS_KERNEL_PIN_SHA" "$NSS_BONDING_PATCH_SHA"
             printf 'Generic procfs patch: 902-debloat_proc restored from Linux %s NSS kernel pin\n' \
+              "$NSS_KERNEL_VERSION"
+            printf 'Qualcomm Q6 WCSS patch: 0113 secure PIL restored from Linux %s NSS kernel pin\n' \
               "$NSS_KERNEL_VERSION"
             printf 'Merged source tree: %s\nBuilder: %s @ %s\n' \
               "$(git rev-parse HEAD^{tree})" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
