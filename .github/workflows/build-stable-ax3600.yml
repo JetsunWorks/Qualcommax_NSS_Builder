@@ -1,4 +1,4 @@
-# Third-party NSS firmware based on the actual OpenWrt v24.10.8 release.
+# Third-party NSS firmware using the pinned NSS tree's Linux 6.6.141 kernel.
 # No schedule, automatic releases, flashing, or private router configuration.
 name: Build AX3600 Stable NSS
 
@@ -25,13 +25,15 @@ env:
   OPENWRT_TAG: v24.10.8
   OPENWRT_SHA: 0b795ce79e23b553aa184080c390f9ce92a2b6d4
   NSS_SOURCE_SHA: 2a9a39243cf39a053b25286826be711505605029
+  NSS_KERNEL_VERSION: 6.6.141
+  NSS_KERNEL_HASH: 3bc2652eb62ab90a90a8b0aa156b91d276f92eb84702971df62fe1a3f1eb7fe1
   NSS_FEED_SHA: 0d970dbf0185e3f53709bd803e8a466598023c57
   SQM_FEED_SHA: 4b4ed8639229be5e70cf94b73cdf7dbc09e66d5d
   TZ: UTC
 
 jobs:
   build:
-    name: OpenWrt 24.10.8 + NSS / Xiaomi AX3600
+    name: OpenWrt 24.10.8 + NSS / AX3600 / Linux 6.6.141
     runs-on: ubuntu-24.04
     timeout-minutes: 350
     defaults:
@@ -78,8 +80,13 @@ jobs:
             "$NSS_FEED_SHA" >> feeds.conf.default
           printf 'src-git sqm_scripts_nss https://github.com/qosmio/sqm-scripts-nss.git^%s\n' \
             "$SQM_FEED_SHA" >> feeds.conf.default
-          git add feeds.conf.default
-          git commit -m "Merge OpenWrt v24.10.8 into pinned 24.10 NSS tree"
+          # Reuse the NSS tree's exact Linux pin so its bonding patch applies
+          # without editing patch context or changing the patch semantics.
+          git show "$NSS_SOURCE_SHA:include/kernel-6.6" > include/kernel-6.6
+          grep -Fxq "LINUX_VERSION-6.6 = .${NSS_KERNEL_VERSION##*.}" include/kernel-6.6
+          grep -Fxq "LINUX_KERNEL_HASH-${NSS_KERNEL_VERSION} = $NSS_KERNEL_HASH" include/kernel-6.6
+          git add feeds.conf.default include/kernel-6.6
+          git commit -m "Merge OpenWrt v24.10.8 with NSS kernel 6.6.141"
           git merge-base --is-ancestor "$OPENWRT_SHA" HEAD
           git merge-base --is-ancestor "$NSS_SOURCE_SHA" HEAD
           {
@@ -87,66 +94,12 @@ jobs:
               "$OPENWRT_TAG" "$OPENWRT_SHA" "$NSS_SOURCE_SHA"
             printf 'Merged source tree: %s\nBuilder: %s @ %s\n' \
               "$(git rev-parse HEAD^{tree})" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            printf 'NSS kernel: %s\nKernel source hash: %s\n' \
+              "$NSS_KERNEL_VERSION" "$NSS_KERNEL_HASH"
             printf 'Run: https://github.com/%s/actions/runs/%s\n' \
               "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
           } > ../artifacts/diagnostics/SOURCES.txt
           cp feeds.conf.default ../artifacts/diagnostics/feeds.conf
-
-      - name: Adapt NSS bonding patch to stable Linux 6.6.144
-        working-directory: openwrt
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
-
-          patch = Path(
-              "target/linux/qualcommax/patches-6.6/"
-              "0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch"
-          )
-          text = patch.read_text(encoding="utf-8")
-
-          hunk_3ad = re.compile(
-              r"@@ -2066,6 \+2124,7 @@ static void ad_enable_collecting_distrib\n"
-              r".*?(?=@@ -2073,6 \+2132,16 @@)",
-              re.S,
-          )
-          stable_3ad = """@@ -2066,5 +2124,6 @@ static void ad_enable_collecting_distrib
-          					      bool *update_slave_arr)
-           {
-          	struct aggregator *aggregator = rcu_dereference(port->aggregator);
-           
-          	if (aggregator->is_active) {
-          +		struct bond_cb *lag_cb_main; /* QCA NSS ECM bonding support */
-          """
-          if len(hunk_3ad.findall(text)) != 1:
-              raise SystemExit("Unexpected 0600-4 LACP hunk; refusing an unverified edit")
-          text, changed_3ad = hunk_3ad.subn(lambda _: stable_3ad, text, count=1)
-
-          hunk_xmit = re.compile(
-              r"@@ -5496,8 \+5789,9 @@ static netdev_tx_t __bond_start_xmit\(str\n"
-              r".*?(?=--- a/include/net/bond_3ad\.h)",
-              re.S,
-          )
-          stable_xmit = """@@ -5496,6 +5789,6 @@ static netdev_tx_t __bond_start_xmit(str
-          	case BOND_MODE_8023AD:
-          		if (bond_should_broadcast_neighbor(skb, dev))
-          			return bond_xmit_broadcast(skb, dev, false);
-          -		fallthrough;
-          +		return bond_3ad_xor_xmit(skb, dev);
-          	case BOND_MODE_XOR:
-          -		return bond_3ad_xor_xmit(skb, dev);
-          +		return bond_xmit_xor(skb, dev); /* QCA NSS ECM bonding support */
-          """
-          if len(hunk_xmit.findall(text)) != 1:
-              raise SystemExit("Unexpected 0600-4 transmit hunk; refusing an unverified edit")
-          text, changed_xmit = hunk_xmit.subn(lambda _: stable_xmit, text, count=1)
-          if changed_3ad != 1 or changed_xmit != 1:
-              raise SystemExit("Failed to update both stable-kernel compatibility hunks")
-
-          patch.write_text(text, encoding="utf-8")
-          print("Updated the two 0600-4 context hunks for Linux 6.6.144.")
-          PY
 
       - name: Install release feeds and NSS feeds
         working-directory: openwrt
@@ -199,7 +152,7 @@ jobs:
           CONFIG_IMAGEOPT=y
           CONFIG_VERSIONOPT=y
           CONFIG_VERSION_NUMBER="24.10.8-nss"
-          CONFIG_VERSION_CODE="qosmio-2a9a392+v24.10.8"
+          CONFIG_VERSION_CODE="qosmio-2a9a392+v24.10.8-k6.6.141"
           CONFIG_VERSION_REPO="https://downloads.openwrt.org/releases/24.10.8"
           # CONFIG_ATH11K_NSS_MESH_SUPPORT is not set
           # CONFIG_PACKAGE_MAC80211_NSS_REDIRECT is not set
@@ -240,6 +193,7 @@ jobs:
           chmod +x files/etc/uci-defaults/99-nss-package-feeds
           cat > files/etc/nss-build-info <<EOF
           Third-party OpenWrt $OPENWRT_TAG + qosmio NSS build for Xiaomi AX3600.
+          Linux kernel: $NSS_KERNEL_VERSION
           Official commit: $OPENWRT_SHA
           NSS source: $NSS_SOURCE_SHA
           Wi-Fi NSS: $WIFI_NSS
@@ -268,8 +222,9 @@ jobs:
           cp ../artifacts/diagnostics/SOURCES.txt ../artifacts/firmware/
           cp ../artifacts/diagnostics/config.diff ../artifacts/firmware/
           cat > ../artifacts/firmware/READ-ME.txt <<'EOF'
-          This is third-party NSS firmware built from OpenWrt v24.10.8 plus
-          qosmio's pinned 24.10 NSS tree, not an official OpenWrt release image.
+          This is third-party NSS firmware built from OpenWrt v24.10.8 sources plus
+          qosmio's pinned 24.10 NSS tree, using Linux 6.6.141.
+          It is not an official OpenWrt release image.
           Target: Xiaomi AX3600, qualcommax/ipq807x, 512 MB RAM.
           LuCI, dnsmasq-full/nftset, nft TPROXY/socket, NSS/ECM are included.
           PassWall2/Xray are not included. Current Xray needs a newer Go toolchain
@@ -285,7 +240,7 @@ jobs:
           (cd ../artifacts/firmware && sha256sum *.bin > SHA256SUMS-firmware)
           {
             echo '## AX3600 stable NSS build completed'
-            echo '- Baseline: official OpenWrt v24.10.8 merged with pinned qosmio NSS.'
+            echo '- Baseline: OpenWrt v24.10.8 sources and pinned qosmio NSS, Linux 6.6.141.'
             echo '- Download firmware, matching IPK packages and source/config records below.'
             echo '- Hardware boot and NSS behavior still require validation on the device.'
           } >> "$GITHUB_STEP_SUMMARY"
