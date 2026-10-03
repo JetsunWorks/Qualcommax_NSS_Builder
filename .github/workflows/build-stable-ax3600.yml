@@ -91,6 +91,19 @@ jobs:
             > target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch
           git show "$NSS_BONDING_PATCH_SHA:target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch" \
             > target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
+          # The pinned 6.6.119 source keeps Aquantia PHY files at the
+          # drivers/net/phy root. Some merged generic backports expect the
+          # files under drivers/net/phy/aquantia/ and fail patch application.
+          # AX3600 has no Aquantia PHY, so exclude only those unrelated patches.
+          mapfile -t aquantia_patches < <(find target/linux/generic \
+            -type f -name '*aquantia*.patch' -print | sort)
+          if ((${#aquantia_patches[@]} == 0)); then
+            echo 'Expected generic Aquantia PHY patches were not found'
+            exit 1
+          fi
+          printf 'Excluding unused Aquantia PHY patches for AX3600:\n'
+          printf '%s\n' "${aquantia_patches[@]}"
+          for patch in "${aquantia_patches[@]}"; do rm -f -- "$patch"; done
           grep -Fxq "LINUX_VERSION-6.6 = .${NSS_KERNEL_VERSION##*.}" include/kernel-6.6
           grep -Fxq "LINUX_KERNEL_HASH-${NSS_KERNEL_VERSION} = $NSS_KERNEL_HASH" include/kernel-6.6
           git add feeds.conf.default include/kernel-6.6 \
@@ -116,6 +129,10 @@ jobs:
             printf 'Run: https://github.com/%s/actions/runs/%s\n' \
               "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
           } > ../artifacts/diagnostics/SOURCES.txt
+          {
+            printf 'Excluded generic Aquantia PHY backports:\n'
+            printf '%s\n' "${aquantia_patches[@]}"
+          } >> ../artifacts/diagnostics/SOURCES.txt
           cp feeds.conf.default ../artifacts/diagnostics/feeds.conf
 
       - name: Install release feeds and NSS feeds
