@@ -83,9 +83,12 @@ jobs:
           # Reuse the NSS tree's exact Linux pin so its bonding patch applies
           # without editing patch context or changing the patch semantics.
           git show "$NSS_SOURCE_SHA:include/kernel-6.6" > include/kernel-6.6
+          git show "$NSS_SOURCE_SHA:target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch" \
+            > target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch
           grep -Fxq "LINUX_VERSION-6.6 = .${NSS_KERNEL_VERSION##*.}" include/kernel-6.6
           grep -Fxq "LINUX_KERNEL_HASH-${NSS_KERNEL_VERSION} = $NSS_KERNEL_HASH" include/kernel-6.6
-          git add feeds.conf.default include/kernel-6.6
+          git add feeds.conf.default include/kernel-6.6 \
+            target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch
           git commit -m "Merge OpenWrt v24.10.8 with NSS kernel 6.6.141"
           git merge-base --is-ancestor "$OPENWRT_SHA" HEAD
           git merge-base --is-ancestor "$NSS_SOURCE_SHA" HEAD
@@ -96,6 +99,8 @@ jobs:
               "$(git rev-parse HEAD^{tree})" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
             printf 'NSS kernel: %s\nKernel source hash: %s\n' \
               "$NSS_KERNEL_VERSION" "$NSS_KERNEL_HASH"
+            printf 'Kernel patch: 610-netfilter from pinned NSS source for Linux %s\n' \
+              "$NSS_KERNEL_VERSION"
             printf 'Run: https://github.com/%s/actions/runs/%s\n' \
               "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
           } > ../artifacts/diagnostics/SOURCES.txt
