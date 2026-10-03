@@ -92,6 +92,62 @@ jobs:
           } > ../artifacts/diagnostics/SOURCES.txt
           cp feeds.conf.default ../artifacts/diagnostics/feeds.conf
 
+      - name: Adapt NSS bonding patch to stable Linux 6.6.144
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          patch = Path(
+              "target/linux/qualcommax/patches-6.6/"
+              "0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch"
+          )
+          text = patch.read_text(encoding="utf-8")
+
+          hunk_3ad = re.compile(
+              r"@@ -2066,6 \+2124,7 @@ static void ad_enable_collecting_distrib\n"
+              r".*?(?=@@ -2073,6 \+2132,16 @@)",
+              re.S,
+          )
+          stable_3ad = """@@ -2066,5 +2124,6 @@ static void ad_enable_collecting_distrib
+          					      bool *update_slave_arr)
+           {
+          	struct aggregator *aggregator = rcu_dereference(port->aggregator);
+           
+          	if (aggregator->is_active) {
+          +		struct bond_cb *lag_cb_main; /* QCA NSS ECM bonding support */
+          """
+          if len(hunk_3ad.findall(text)) != 1:
+              raise SystemExit("Unexpected 0600-4 LACP hunk; refusing an unverified edit")
+          text, changed_3ad = hunk_3ad.subn(lambda _: stable_3ad, text, count=1)
+
+          hunk_xmit = re.compile(
+              r"@@ -5496,8 \+5789,9 @@ static netdev_tx_t __bond_start_xmit\(str\n"
+              r".*?(?=--- a/include/net/bond_3ad\.h)",
+              re.S,
+          )
+          stable_xmit = """@@ -5496,6 +5789,6 @@ static netdev_tx_t __bond_start_xmit(str
+          	case BOND_MODE_8023AD:
+          		if (bond_should_broadcast_neighbor(skb, dev))
+          			return bond_xmit_broadcast(skb, dev, false);
+          -		fallthrough;
+          +		return bond_3ad_xor_xmit(skb, dev);
+          	case BOND_MODE_XOR:
+          -		return bond_3ad_xor_xmit(skb, dev);
+          +		return bond_xmit_xor(skb, dev); /* QCA NSS ECM bonding support */
+          """
+          if len(hunk_xmit.findall(text)) != 1:
+              raise SystemExit("Unexpected 0600-4 transmit hunk; refusing an unverified edit")
+          text, changed_xmit = hunk_xmit.subn(lambda _: stable_xmit, text, count=1)
+          if changed_3ad != 1 or changed_xmit != 1:
+              raise SystemExit("Failed to update both stable-kernel compatibility hunks")
+
+          patch.write_text(text, encoding="utf-8")
+          print("Updated the two 0600-4 context hunks for Linux 6.6.144.")
+          PY
+
       - name: Install release feeds and NSS feeds
         working-directory: openwrt
         run: |
