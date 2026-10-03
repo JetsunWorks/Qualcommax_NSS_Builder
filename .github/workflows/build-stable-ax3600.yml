@@ -140,6 +140,7 @@ jobs:
           CONFIG_PACKAGE_unzip=y
           CONFIG_PACKAGE_htop=y
           CONFIG_PACKAGE_iperf3=y
+          CONFIG_IMAGEOPT=y
           CONFIG_VERSIONOPT=y
           CONFIG_VERSION_NUMBER="24.10.8-nss"
           CONFIG_VERSION_CODE="qosmio-2a9a392+v24.10.8"
