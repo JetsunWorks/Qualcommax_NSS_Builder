@@ -24,6 +24,8 @@ concurrency:
 env:
   OPENWRT_TAG: v24.10.8
   OPENWRT_SHA: 0b795ce79e23b553aa184080c390f9ce92a2b6d4
+  KERNEL_PATCH_TAG: v24.10.5
+  KERNEL_PATCH_SHA: 4f7e6e554be2aef6a55be36f9f954d56705eb2ee
   NSS_SOURCE_SHA: 2a9a39243cf39a053b25286826be711505605029
   NSS_KERNEL_PIN_SHA: 581050ce4e1f28a8e371cbd090f48945e02d4448
   NSS_BONDING_PATCH_SHA: a65d1295baf96046a9aa7f206a40230358d83e1c
@@ -66,6 +68,9 @@ jobs:
           git fetch --no-tags https://github.com/openwrt/openwrt.git \
             "refs/tags/$OPENWRT_TAG:refs/tags/$OPENWRT_TAG"
           test "$(git rev-parse "$OPENWRT_TAG^{commit}")" = "$OPENWRT_SHA"
+          git fetch --no-tags https://github.com/openwrt/openwrt.git \
+            "refs/tags/$KERNEL_PATCH_TAG:refs/tags/$KERNEL_PATCH_TAG"
+          test "$(git rev-parse "$KERNEL_PATCH_TAG^{commit}")" = "$KERNEL_PATCH_SHA"
           git config user.name github-actions
           git config user.email github-actions@users.noreply.github.com
           # Preserve both histories and all stable fixes. Only the feed-list
@@ -82,6 +87,12 @@ jobs:
             "$NSS_FEED_SHA" >> feeds.conf.default
           printf 'src-git sqm_scripts_nss https://github.com/qosmio/sqm-scripts-nss.git^%s\n' \
             "$SQM_FEED_SHA" >> feeds.conf.default
+          # The 24.10.8 backport queue assumes Linux 6.6.141. This build pins
+          # Linux 6.6.119, so restore the official 24.10.5 generic backports,
+          # which match that exact kernel source and retain prerequisite moves.
+          git checkout "$KERNEL_PATCH_SHA" -- target/linux/generic/backport-6.6
+          test -s target/linux/generic/backport-6.6/702-01-v6.7-net-phy-aquantia-move-to-separate-directory.patch
+          test -s target/linux/generic/backport-6.6/713-v6.9-01-net-phy-move-at803x-PHY-driver-to-dedicated-directory.patch
           # Keep the current NSS driver tree, but use the historical 6.6.119
           # kernel pin and the bonding patch revision explicitly refreshed for it.
           git merge-base --is-ancestor "$NSS_KERNEL_PIN_SHA" "$NSS_SOURCE_SHA"
@@ -91,25 +102,13 @@ jobs:
             > target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch
           git show "$NSS_BONDING_PATCH_SHA:target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch" \
             > target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
-          # The pinned 6.6.119 source keeps Aquantia PHY files at the
-          # drivers/net/phy root. Some merged generic backports expect the
-          # files under drivers/net/phy/aquantia/ and fail patch application.
-          # AX3600 has no Aquantia PHY, so exclude only those unrelated patches.
-          mapfile -t aquantia_patches < <(find target/linux/generic \
-            -type f -name '*aquantia*.patch' -print | sort)
-          if ((${#aquantia_patches[@]} == 0)); then
-            echo 'Expected generic Aquantia PHY patches were not found'
-            exit 1
-          fi
-          printf 'Excluding unused Aquantia PHY patches for AX3600:\n'
-          printf '%s\n' "${aquantia_patches[@]}"
-          for patch in "${aquantia_patches[@]}"; do rm -f -- "$patch"; done
           grep -Fxq "LINUX_VERSION-6.6 = .${NSS_KERNEL_VERSION##*.}" include/kernel-6.6
           grep -Fxq "LINUX_KERNEL_HASH-${NSS_KERNEL_VERSION} = $NSS_KERNEL_HASH" include/kernel-6.6
           git add feeds.conf.default include/kernel-6.6 \
+            target/linux/generic/backport-6.6 \
             target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch \
             target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
-          git commit -m "Merge OpenWrt v24.10.8 with NSS kernel 6.6.119 patches"
+          git commit -m "Use 6.6.119-compatible OpenWrt kernel backports"
           git merge-base --is-ancestor "$OPENWRT_SHA" HEAD
           git merge-base --is-ancestor "$NSS_SOURCE_SHA" HEAD
           git merge-base --is-ancestor "$NSS_KERNEL_PIN_SHA" HEAD
@@ -117,6 +116,8 @@ jobs:
           {
             printf 'Official release: %s\nOfficial commit: %s\nNSS source: %s\n' \
               "$OPENWRT_TAG" "$OPENWRT_SHA" "$NSS_SOURCE_SHA"
+            printf 'Kernel patch baseline: %s @ %s (matched to Linux %s)\n' \
+              "$KERNEL_PATCH_TAG" "$KERNEL_PATCH_SHA" "$NSS_KERNEL_VERSION"
             printf 'Kernel pin source: %s\nBonding patch source: %s\n' \
               "$NSS_KERNEL_PIN_SHA" "$NSS_BONDING_PATCH_SHA"
             printf 'Merged source tree: %s\nBuilder: %s @ %s\n' \
@@ -129,10 +130,6 @@ jobs:
             printf 'Run: https://github.com/%s/actions/runs/%s\n' \
               "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
           } > ../artifacts/diagnostics/SOURCES.txt
-          {
-            printf 'Excluded generic Aquantia PHY backports:\n'
-            printf '%s\n' "${aquantia_patches[@]}"
-          } >> ../artifacts/diagnostics/SOURCES.txt
           cp feeds.conf.default ../artifacts/diagnostics/feeds.conf
 
       - name: Install release feeds and NSS feeds
