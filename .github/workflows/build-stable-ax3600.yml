@@ -28,7 +28,7 @@ env:
   KERNEL_PATCH_SHA: 4f7e6e554be2aef6a55be36f9f954d56705eb2ee
   NSS_SOURCE_SHA: 2a9a39243cf39a053b25286826be711505605029
   NSS_KERNEL_PIN_SHA: 581050ce4e1f28a8e371cbd090f48945e02d4448
-  NSS_BONDING_PATCH_SHA: a65d1295baf96046a9aa7f206a40230358d83e1c
+  NSS_KERNEL_PATCH_SET_SHA: a65d1295baf96046a9aa7f206a40230358d83e1c
   NSS_KERNEL_VERSION: 6.6.119
   NSS_KERNEL_HASH: 3da09b980bb404cc28793479bb2d6c636522679215ffa65a04c893575253e5e8
   NSS_FEED_SHA: 0d970dbf0185e3f53709bd803e8a466598023c57
@@ -99,7 +99,7 @@ jobs:
           # kernel pin and patches with matching kernel API contexts. The
           # current NSS procfs-debloat and Q6 WCSS hunks target newer kernels.
           git merge-base --is-ancestor "$NSS_KERNEL_PIN_SHA" "$NSS_SOURCE_SHA"
-          git merge-base --is-ancestor "$NSS_BONDING_PATCH_SHA" "$NSS_SOURCE_SHA"
+          git merge-base --is-ancestor "$NSS_KERNEL_PATCH_SET_SHA" "$NSS_SOURCE_SHA"
           git show "$NSS_KERNEL_PIN_SHA:include/kernel-6.6" > include/kernel-6.6
           git show "$NSS_KERNEL_PIN_SHA:target/linux/generic/hack-6.6/902-debloat_proc.patch" \
             > target/linux/generic/hack-6.6/902-debloat_proc.patch
@@ -109,8 +109,23 @@ jobs:
           test -s target/linux/qualcommax/patches-6.6/0113-remoteproc-qcom-Add-secure-PIL-support.patch
           git show "$NSS_KERNEL_PIN_SHA:target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch" \
             > target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch
-          git show "$NSS_BONDING_PATCH_SHA:target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch" \
-            > target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
+          # Restore the complete patch set updated alongside the Linux 6.6.119
+          # kernel pin. These contexts are coupled: restoring only 0600-4 leaves
+          # CORE and other NSS patches targeting later kernel APIs.
+          mapfile -t nss_6_6_119_patches < <(
+            git diff-tree --no-commit-id --name-only --diff-filter=AM -r \
+              "$NSS_KERNEL_PATCH_SET_SHA" -- target/linux/qualcommax/patches-6.6/
+          )
+          if [[ "${#nss_6_6_119_patches[@]}" -ne 11 ]]; then
+            printf 'Expected 11 NSS patch files for Linux 6.6.119, found %s:\n' \
+              "${#nss_6_6_119_patches[@]}"
+            printf '%s\n' "${nss_6_6_119_patches[@]}"
+            exit 1
+          fi
+          for patch in "${nss_6_6_119_patches[@]}"; do
+            git show "$NSS_KERNEL_PATCH_SET_SHA:$patch" > "$patch"
+            test -s "$patch"
+          done
           grep -Fxq "LINUX_VERSION-6.6 = .${NSS_KERNEL_VERSION##*.}" include/kernel-6.6
           grep -Fxq "LINUX_KERNEL_HASH-${NSS_KERNEL_VERSION} = $NSS_KERNEL_HASH" include/kernel-6.6
           git add feeds.conf.default include/kernel-6.6 \
@@ -118,12 +133,12 @@ jobs:
             target/linux/generic/pending-6.6 \
             target/linux/generic/hack-6.6/902-debloat_proc.patch \
             target/linux/qualcommax/patches-6.6/0113-remoteproc-qcom-Add-secure-PIL-support.patch \
-            target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
+            "${nss_6_6_119_patches[@]}"
           git commit -m "Use 6.6.119-compatible OpenWrt patch queues"
           git merge-base --is-ancestor "$OPENWRT_SHA" HEAD
           git merge-base --is-ancestor "$NSS_SOURCE_SHA" HEAD
           git merge-base --is-ancestor "$NSS_KERNEL_PIN_SHA" HEAD
-          git merge-base --is-ancestor "$NSS_BONDING_PATCH_SHA" HEAD
+          git merge-base --is-ancestor "$NSS_KERNEL_PATCH_SET_SHA" HEAD
           {
             printf 'Official release: %s\nOfficial commit: %s\nNSS source: %s\n' \
               "$OPENWRT_TAG" "$OPENWRT_SHA" "$NSS_SOURCE_SHA"
@@ -131,8 +146,9 @@ jobs:
               "$KERNEL_PATCH_TAG" "$KERNEL_PATCH_SHA" "$NSS_KERNEL_VERSION"
             printf 'Generic backport and pending queues: %s @ %s\n' \
               "$KERNEL_PATCH_TAG" "$KERNEL_PATCH_SHA"
-            printf 'Kernel pin source: %s\nBonding patch source: %s\n' \
-              "$NSS_KERNEL_PIN_SHA" "$NSS_BONDING_PATCH_SHA"
+            printf 'Kernel pin source: %s\n6.6.119 NSS patch-set source: %s (%s files)\n' \
+              "$NSS_KERNEL_PIN_SHA" "$NSS_KERNEL_PATCH_SET_SHA" \
+              "${#nss_6_6_119_patches[@]}"
             printf 'Generic procfs patch: 902-debloat_proc restored from Linux %s NSS kernel pin\n' \
               "$NSS_KERNEL_VERSION"
             printf 'Qualcomm Q6 WCSS patch: 0113 secure PIL restored from Linux %s NSS kernel pin\n' \
@@ -143,7 +159,8 @@ jobs:
               "$NSS_KERNEL_VERSION" "$NSS_KERNEL_HASH"
             printf 'Kernel patch: 610-netfilter restored from the Linux %s NSS kernel pin\n' \
               "$NSS_KERNEL_VERSION"
-            printf 'Bonding patch: NSS 0600-4 revision refreshed for Linux 6.6.119\n'
+            printf 'Qualcomm NSS patches: all %s files restored from the Linux 6.6.119 update\n' \
+              "${#nss_6_6_119_patches[@]}"
             printf 'Run: https://github.com/%s/actions/runs/%s\n' \
               "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
           } > ../artifacts/diagnostics/SOURCES.txt
@@ -245,7 +262,7 @@ jobs:
           Official commit: $OPENWRT_SHA
           NSS source: $NSS_SOURCE_SHA
           NSS kernel pin source: $NSS_KERNEL_PIN_SHA
-          NSS bonding patch source: $NSS_BONDING_PATCH_SHA
+          NSS 6.6.119 patch-set source: $NSS_KERNEL_PATCH_SET_SHA
           Wi-Fi NSS: $WIFI_NSS
           Do not install official-release kernel modules on this custom kernel.
           PassWall2 and Xray are not included; proxy kernel prerequisites are included.
@@ -274,7 +291,7 @@ jobs:
           cat > ../artifacts/firmware/READ-ME.txt <<'EOF'
           This is third-party NSS firmware built from OpenWrt v24.10.8 sources plus
           qosmio's pinned 24.10 NSS tree, using Linux 6.6.119.
-          Kernel pin source: NSS commit 581050c. Bonding patch source: NSS commit a65d129.
+          Kernel pin source: NSS commit 581050c. All 11 compatible NSS patch files come from commit a65d129.
           It is not an official OpenWrt release image.
           Target: Xiaomi AX3600, qualcommax/ipq807x, 512 MB RAM.
           LuCI, dnsmasq-full/nftset, nft TPROXY/socket, NSS/ECM are included.
