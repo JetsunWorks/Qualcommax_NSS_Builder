@@ -96,10 +96,14 @@ jobs:
           test -s target/linux/generic/backport-6.6/702-01-v6.7-net-phy-aquantia-move-to-separate-directory.patch
           test -s target/linux/generic/backport-6.6/713-v6.9-01-net-phy-move-at803x-PHY-driver-to-dedicated-director.patch
           # Keep the current NSS driver tree, but use the historical 6.6.119
-          # kernel pin and the bonding patch revision explicitly refreshed for it.
+          # kernel pin and patches with matching kernel API contexts. The
+          # current NSS procfs-debloat hunk expects a newer ptype iterator type.
           git merge-base --is-ancestor "$NSS_KERNEL_PIN_SHA" "$NSS_SOURCE_SHA"
           git merge-base --is-ancestor "$NSS_BONDING_PATCH_SHA" "$NSS_SOURCE_SHA"
           git show "$NSS_KERNEL_PIN_SHA:include/kernel-6.6" > include/kernel-6.6
+          git show "$NSS_KERNEL_PIN_SHA:target/linux/generic/hack-6.6/902-debloat_proc.patch" \
+            > target/linux/generic/hack-6.6/902-debloat_proc.patch
+          test -s target/linux/generic/hack-6.6/902-debloat_proc.patch
           git show "$NSS_KERNEL_PIN_SHA:target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch" \
             > target/linux/generic/pending-6.6/610-netfilter_match_bypass_default_checks.patch
           git show "$NSS_BONDING_PATCH_SHA:target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch" \
@@ -109,6 +113,7 @@ jobs:
           git add feeds.conf.default include/kernel-6.6 \
             target/linux/generic/backport-6.6 \
             target/linux/generic/pending-6.6 \
+            target/linux/generic/hack-6.6/902-debloat_proc.patch \
             target/linux/qualcommax/patches-6.6/0600-4-qca-nss-ecm-support-net-bonding-over-LAG-interface.patch
           git commit -m "Use 6.6.119-compatible OpenWrt patch queues"
           git merge-base --is-ancestor "$OPENWRT_SHA" HEAD
@@ -124,6 +129,8 @@ jobs:
               "$KERNEL_PATCH_TAG" "$KERNEL_PATCH_SHA"
             printf 'Kernel pin source: %s\nBonding patch source: %s\n' \
               "$NSS_KERNEL_PIN_SHA" "$NSS_BONDING_PATCH_SHA"
+            printf 'Generic procfs patch: 902-debloat_proc restored from Linux %s NSS kernel pin\n' \
+              "$NSS_KERNEL_VERSION"
             printf 'Merged source tree: %s\nBuilder: %s @ %s\n' \
               "$(git rev-parse HEAD^{tree})" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
             printf 'NSS kernel: %s\nKernel source hash: %s\n' \
