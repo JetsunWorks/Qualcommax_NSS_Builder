@@ -1,0 +1,262 @@
+# Third-party NSS firmware based on the actual OpenWrt v24.10.8 release.
+# No schedule, automatic releases, flashing, or private router configuration.
+name: Build AX3600 Stable NSS
+
+on:
+  workflow_dispatch:
+    inputs:
+      wifi_nss:
+        description: Enable ath11k NSS Wi-Fi offload (disable for CPU Wi-Fi path)
+        type: boolean
+        default: true
+      sqm:
+        description: Include NSS SQM packages (configure rates after installation)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-ax3600-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  OPENWRT_TAG: v24.10.8
+  OPENWRT_SHA: 0b795ce79e23b553aa184080c390f9ce92a2b6d4
+  NSS_SOURCE_SHA: 2a9a39243cf39a053b25286826be711505605029
+  NSS_FEED_SHA: 0d970dbf0185e3f53709bd803e8a466598023c57
+  SQM_FEED_SHA: 4b4ed8639229be5e70cf94b73cdf7dbc09e66d5d
+  TZ: UTC
+
+jobs:
+  build:
+    name: OpenWrt 24.10.8 + NSS / Xiaomi AX3600
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Prepare runner and build dependencies
+        run: |
+          set -euo pipefail
+          # These are disposable GitHub-hosted runner SDKs, not router data.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison gawk gettext git \
+            libncurses-dev libssl-dev libelf-dev zlib1g-dev liblzma-dev \
+            python3 python3-setuptools python3-pyelftools \
+            rsync swig unzip file wget curl ca-certificates time
+          df -h .
+          mkdir -p artifacts/firmware artifacts/packages artifacts/diagnostics
+
+      - name: Merge pinned NSS tree with the official stable release
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --single-branch --branch 24.10-nss \
+            https://github.com/qosmio/openwrt-ipq.git openwrt
+          cd openwrt
+          git checkout --detach "$NSS_SOURCE_SHA"
+          git fetch --no-tags https://github.com/openwrt/openwrt.git \
+            "refs/tags/$OPENWRT_TAG:refs/tags/$OPENWRT_TAG"
+          test "$(git rev-parse "$OPENWRT_TAG^{commit}")" = "$OPENWRT_SHA"
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          # Preserve both histories and all stable fixes. Only the feed-list
+          # conflict was observed for these pinned commits; fail on any other.
+          if ! git merge --no-ff --no-commit "$OPENWRT_SHA"; then
+            conflicts=$(git diff --name-only --diff-filter=U)
+            if [[ "$conflicts" != feeds.conf.default ]]; then
+              printf 'Unexpected source conflicts:\n%s\n' "$conflicts"
+              exit 1
+            fi
+          fi
+          git show "$OPENWRT_SHA:feeds.conf.default" > feeds.conf.default
+          printf 'src-git nss_packages https://github.com/qosmio/nss-packages.git^%s\n' \
+            "$NSS_FEED_SHA" >> feeds.conf.default
+          printf 'src-git sqm_scripts_nss https://github.com/qosmio/sqm-scripts-nss.git^%s\n' \
+            "$SQM_FEED_SHA" >> feeds.conf.default
+          git add feeds.conf.default
+          git commit -m "Merge OpenWrt v24.10.8 into pinned 24.10 NSS tree"
+          git merge-base --is-ancestor "$OPENWRT_SHA" HEAD
+          git merge-base --is-ancestor "$NSS_SOURCE_SHA" HEAD
+          {
+            printf 'Official release: %s\nOfficial commit: %s\nNSS source: %s\n' \
+              "$OPENWRT_TAG" "$OPENWRT_SHA" "$NSS_SOURCE_SHA"
+            printf 'Merged source tree: %s\nBuilder: %s @ %s\n' \
+              "$(git rev-parse HEAD^{tree})" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            printf 'Run: https://github.com/%s/actions/runs/%s\n' \
+              "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+          } > ../artifacts/diagnostics/SOURCES.txt
+          cp feeds.conf.default ../artifacts/diagnostics/feeds.conf
+
+      - name: Install release feeds and NSS feeds
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          for feed in feeds/*; do
+            if [[ -d "$feed/.git" ]]; then
+              printf '%s %s\n' "$feed" "$(git -C "$feed" rev-parse HEAD)"
+            fi
+          done >> ../artifacts/diagnostics/SOURCES.txt
+
+      - name: Configure AX3600, NSS and transparent-proxy prerequisites
+        working-directory: openwrt
+        env:
+          WIFI_NSS: ${{ inputs.wifi_nss }}
+          INCLUDE_SQM: ${{ inputs.sqm }}
+        run: |
+          set -euo pipefail
+          cat > .config <<'EOF'
+          CONFIG_TARGET_qualcommax=y
+          CONFIG_TARGET_qualcommax_ipq807x=y
+          CONFIG_TARGET_qualcommax_ipq807x_DEVICE_xiaomi_ax3600=y
+          CONFIG_IPQ_MEM_PROFILE_512=y
+          CONFIG_NSS_MEM_PROFILE_MEDIUM=y
+          CONFIG_ATH11K_MEM_PROFILE_512M=y
+          CONFIG_PACKAGE_kmod-qca-nss-dp=y
+          CONFIG_PACKAGE_kmod-qca-nss-drv=y
+          CONFIG_PACKAGE_kmod-qca-nss-ecm=y
+          CONFIG_PACKAGE_kmod-qca-nss-drv-bridge-mgr=y
+          CONFIG_PACKAGE_kmod-qca-nss-drv-vlan-mgr=y
+          CONFIG_PACKAGE_kmod-qca-nss-drv-pppoe=y
+          CONFIG_NSS_DRV_IPV6_ENABLE=y
+          CONFIG_NSS_DRV_PPPOE_ENABLE=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-ssl=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-opkg-zh-cn=y
+          # CONFIG_PACKAGE_dnsmasq is not set
+          CONFIG_PACKAGE_dnsmasq-full=y
+          CONFIG_PACKAGE_dnsmasq_full_nftset=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
+          CONFIG_PACKAGE_kmod-nft-socket=y
+          CONFIG_PACKAGE_kmod-tun=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_unzip=y
+          CONFIG_PACKAGE_htop=y
+          CONFIG_PACKAGE_iperf3=y
+          CONFIG_VERSIONOPT=y
+          CONFIG_VERSION_NUMBER="24.10.8-nss"
+          CONFIG_VERSION_CODE="qosmio-2a9a392+v24.10.8"
+          CONFIG_VERSION_REPO="https://downloads.openwrt.org/releases/24.10.8"
+          # CONFIG_ATH11K_NSS_MESH_SUPPORT is not set
+          # CONFIG_PACKAGE_MAC80211_NSS_REDIRECT is not set
+          EOF
+          if [[ "$WIFI_NSS" == true ]]; then
+            printf '%s\n' CONFIG_ATH11K_NSS_SUPPORT=y \
+              CONFIG_PACKAGE_MAC80211_NSS_SUPPORT=y >> .config
+          else
+            printf '%s\n' '# CONFIG_ATH11K_NSS_SUPPORT is not set' \
+              '# CONFIG_PACKAGE_MAC80211_NSS_SUPPORT is not set' >> .config
+          fi
+          if [[ "$INCLUDE_SQM" == true ]]; then
+            printf '%s\n' CONFIG_PACKAGE_sqm-scripts-nss=y \
+              CONFIG_PACKAGE_luci-app-sqm=y CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y \
+              CONFIG_NSS_DRV_SHAPER_ENABLE=y >> .config
+          fi
+          cp .config ../artifacts/diagnostics/config.seed
+          make defconfig
+          # Do not silently drop requested packages or required NSS options.
+          while IFS= read -r option; do
+            if [[ "$option" == CONFIG_*=y ]]; then
+              grep -Fxq "$option" .config || { echo "Missing option: $option"; exit 1; }
+            fi
+          done < ../artifacts/diagnostics/config.seed
+          cp .config ../artifacts/diagnostics/config.full
+          ./scripts/diffconfig.sh > ../artifacts/diagnostics/config.diff
+          mkdir -p files/etc/uci-defaults
+          cat > files/etc/uci-defaults/99-nss-package-feeds <<'EOF'
+          #!/bin/sh
+          # This custom kernel has a different ABI from official OpenWrt.
+          # Keep official user-space feeds; use the matching artifact for kmods.
+          if [ -f /etc/opkg/distfeeds.conf ]; then
+            sed -i -e '/^src\/gz openwrt_core /s/^/# /' \
+              -e '/^src\/gz openwrt_kmods /s/^/# /' /etc/opkg/distfeeds.conf
+          fi
+          exit 0
+          EOF
+          chmod +x files/etc/uci-defaults/99-nss-package-feeds
+          cat > files/etc/nss-build-info <<EOF
+          Third-party OpenWrt $OPENWRT_TAG + qosmio NSS build for Xiaomi AX3600.
+          Official commit: $OPENWRT_SHA
+          NSS source: $NSS_SOURCE_SHA
+          Wi-Fi NSS: $WIFI_NSS
+          Do not install official-release kernel modules on this custom kernel.
+          PassWall2 and Xray are not included; proxy kernel prerequisites are included.
+          EOF
+
+      - name: Download sources
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          make download -j8 2>&1 | tee ../artifacts/diagnostics/download.log
+
+      - name: Build firmware and matching packages
+        working-directory: openwrt
+        run: |
+          set -euo pipefail
+          if ! make -j"$(nproc)" 2>&1 | tee ../artifacts/diagnostics/build.log; then
+            make -j1 V=s 2>&1 | tee ../artifacts/diagnostics/build-retry.log
+          fi
+          image_dir=bin/targets/qualcommax/ipq807x
+          test -s "$image_dir/openwrt-24.10.8-nss-qualcommax-ipq807x-xiaomi_ax3600-squashfs-sysupgrade.bin"
+          find "$image_dir" -maxdepth 1 -type f -exec cp {} ../artifacts/firmware/ \;
+          tar -czf ../artifacts/packages/ax3600-matching-ipk-packages.tar.gz \
+            -C bin packages targets/qualcommax/ipq807x/packages
+          cp ../artifacts/diagnostics/SOURCES.txt ../artifacts/firmware/
+          cp ../artifacts/diagnostics/config.diff ../artifacts/firmware/
+          cat > ../artifacts/firmware/READ-ME.txt <<'EOF'
+          This is third-party NSS firmware built from OpenWrt v24.10.8 plus
+          qosmio's pinned 24.10 NSS tree, not an official OpenWrt release image.
+          Target: Xiaomi AX3600, qualcommax/ipq807x, 512 MB RAM.
+          LuCI, dnsmasq-full/nftset, nft TPROXY/socket, NSS/ECM are included.
+          PassWall2/Xray are not included. Current Xray needs a newer Go toolchain
+          than the pinned 24.10.8 package feed; do not blindly mix SNAPSHOT feeds.
+          Use matching IPK packages for this custom kernel. Official core/kmod
+          repositories are disabled on first boot to avoid kernel ABI conflicts.
+          No passwords, SSH keys, VPN nodes or personal settings are embedded.
+          Default network settings are those of OpenWrt; configure after flashing.
+          A successful build does not prove bootability, Wi-Fi or NSS operation.
+          Check the router's actual partition/boot layout and image compatibility
+          before flashing. A dual-partition rollback is not assumed by this build.
+          EOF
+          (cd ../artifacts/firmware && sha256sum *.bin > SHA256SUMS-firmware)
+          {
+            echo '## AX3600 stable NSS build completed'
+            echo '- Baseline: official OpenWrt v24.10.8 merged with pinned qosmio NSS.'
+            echo '- Download firmware, matching IPK packages and source/config records below.'
+            echo '- Hardware boot and NSS behavior still require validation on the device.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: AX3600-OpenWrt-24.10.8-NSS-firmware-${{ github.run_number }}
+          path: artifacts/firmware/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload matching IPK packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: AX3600-24.10.8-NSS-matching-packages-${{ github.run_number }}
+          path: artifacts/packages/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload source records, configuration and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AX3600-stable-build-diagnostics-${{ github.run_number }}
+          path: artifacts/diagnostics/
+          if-no-files-found: warn
+          retention-days: 30
